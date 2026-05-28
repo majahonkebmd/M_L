@@ -106,13 +106,50 @@ def _extract_year_from_text(text: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _extract_mileage_from_text(text: str | None) -> int | None:
+def _normalize_mileage_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace("ＫＭ", "km").replace("Km", "km").replace("KM", "km").replace("㎞", "km")
+    cleaned = re.sub(r"\s+", "", cleaned)
+    return cleaned or None
+
+
+def _extract_mileage_from_text(text: str | None) -> str | None:
     if not text:
         return None
-    match = re.search(r"([0-9][0-9,]*)\s*(?:km|公里)", text, flags=re.IGNORECASE)
-    if not match:
+    cleaned = _clean_text(text)
+    if not cleaned:
         return None
-    return int(match.group(1).replace(",", ""))
+
+    patterns = [
+        # Labeled mileage fields, with or without explicit unit.
+        r"(?:行駛(?:里|哩)程|(?:總)?里程|公里數)\s*[:：]?\s*([0-9][0-9,\.]*\s*(?:萬)?\s*(?:公里|km|KM)?)",
+        r"(?:行駛(?:里|哩)程|(?:總)?里程|公里數)\s*[:：]?\s*([一二三四五六七八九十百千萬兩零〇]+\s*(?:萬|千)?\s*(?:公里|km|KM)?)",
+        # Generic mileage mentions.
+        r"([0-9][0-9,\.]*\s*(?:萬)?\s*(?:公里|km|KM))",
+        r"([一二三四五六七八九十百千萬兩零〇]+\s*(?:萬|千)?\s*(?:公里|km|KM))",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+        if not match:
+            continue
+        mileage_value = _normalize_mileage_value(match.group(1))
+        if not mileage_value:
+            continue
+        if not re.search(r"(公里|km)", mileage_value, flags=re.IGNORECASE):
+            mileage_value = f"{mileage_value}公里"
+        return mileage_value
+
+    # Preserve explicit unknown/unspecified mileage statements if present.
+    unknown_match = re.search(r"(?:里程|公里).{0,6}(?:不明|未知|未提供|無法提供)", cleaned)
+    if unknown_match:
+        return _normalize_mileage_value(unknown_match.group(0))
+
+    return None
 
 
 def _looks_like_template_text(text: str | None) -> bool:
@@ -625,6 +662,7 @@ def parse_listing(
     jsonld_price_text = None
     jsonld_condition = None
     jsonld_location = None
+    jsonld_description = None
 
     if product_jsonld:
         raw_jsonld_title = product_jsonld.get("name")
@@ -642,6 +680,7 @@ def parse_listing(
         jsonld_price_text = _extract_price_text_from_product_jsonld(product_jsonld)
         raw_description = product_jsonld.get("description")
         if isinstance(raw_description, str):
+            jsonld_description = _clean_text(raw_description)
             jsonld_condition, jsonld_location = _extract_condition_location_from_description(raw_description)
 
     if _looks_like_template_text(title):
@@ -683,7 +722,15 @@ def parse_listing(
         model = model or inferred_model
 
     year = _extract_numeric(year_text) or _extract_year_from_text(title)
-    mileage_km = _extract_numeric(mileage_text) or _extract_mileage_from_text(title)
+    mileage_km = (
+        _extract_mileage_from_text(mileage_text)
+        or _extract_mileage_from_text(title)
+        or _extract_mileage_from_text(jsonld_description)
+    )
+
+    # If a mileage selector exists but pattern extraction missed, keep raw text.
+    if not mileage_km and mileage_text and not _looks_like_template_text(mileage_text):
+        mileage_km = _clean_text(mileage_text)
 
     return {
         "url": url,
