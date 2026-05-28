@@ -7,11 +7,35 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from scrapers.ruten_scraper import get_listing_urls, scrape_listing_urls_to_csv, scrape_ruten_listings_to_csv
+from scrapers.ruten_scraper import (
+    get_listing_urls as ruten_get_listing_urls,
+)
+from scrapers.ruten_scraper import (
+    scrape_listing_urls_to_csv as ruten_scrape_listing_urls_to_csv,
+)
+from scrapers.ruten_scraper import (
+    scrape_ruten_listings_to_csv,
+)
+from scrapers.yahoo_scraper import (
+    get_listing_urls as yahoo_get_listing_urls,
+)
+from scrapers.yahoo_scraper import (
+    scrape_listing_urls_to_csv as yahoo_scrape_listing_urls_to_csv,
+)
+from scrapers.yahoo_scraper import (
+    scrape_yahoo_listings_to_csv,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Scrape second-hand scooter listings from Ruten")
+    parser = argparse.ArgumentParser(description="Scrape second-hand scooter listings from supported marketplaces")
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=["ruten", "yahoo"],
+        default="ruten",
+        help="Scraper source to use",
+    )
     parser.add_argument("--max-pages", type=int, default=3, help="How many index pages per query to scrape")
     parser.add_argument(
         "--query",
@@ -25,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=str,
         default=None,
-        help="Output CSV path. Default: data/raw/ruten_YYYYMMDD_HHMMSS.csv",
+        help="Output CSV path. Default: data/raw/{source}_YYYYMMDD_HHMMSS.csv",
     )
     parser.add_argument(
         "--failed-log",
@@ -61,8 +85,17 @@ def main() -> None:
 
     args = build_parser().parse_args()
 
+    if args.source == "yahoo":
+        source_get_listing_urls = yahoo_get_listing_urls
+        source_scrape_listing_urls_to_csv = yahoo_scrape_listing_urls_to_csv
+        source_scrape_listings_to_csv = scrape_yahoo_listings_to_csv
+    else:
+        source_get_listing_urls = ruten_get_listing_urls
+        source_scrape_listing_urls_to_csv = ruten_scrape_listing_urls_to_csv
+        source_scrape_listings_to_csv = scrape_ruten_listings_to_csv
+
     if args.diagnose_index:
-        urls = get_listing_urls(
+        urls = source_get_listing_urls(
             max_pages=1,
             query=args.diagnose_query,
             proxy_url=args.proxy,
@@ -74,7 +107,7 @@ def main() -> None:
         return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = args.output or f"data/raw/ruten_{timestamp}.csv"
+    output_path = args.output or f"data/raw/{args.source}_{timestamp}.csv"
 
     if args.urls_file:
         urls_path = Path(args.urls_file)
@@ -97,14 +130,14 @@ def main() -> None:
                 "Add one URL per line (lines starting with # are ignored)."
             )
 
-        result = scrape_listing_urls_to_csv(
+        result = source_scrape_listing_urls_to_csv(
             listing_urls=listing_urls,
             output_path=output_path,
             proxy_url=args.proxy,
             failed_url_path=args.failed_log,
         )
     else:
-        result = scrape_ruten_listings_to_csv(
+        result = source_scrape_listings_to_csv(
             output_path=output_path,
             max_pages=args.max_pages,
             queries=args.queries,
